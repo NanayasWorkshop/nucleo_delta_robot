@@ -9,7 +9,13 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(segment_controller)
 
 # Add source files
-target_sources(app PRIVATE src/main.c)
+target_sources(app PRIVATE
+    src/main.c
+    src/network.c
+)
 
 # Add include directories
-target_include_directories(app PRIVATE include)
+target_include_directories(app PRIVATE
+    include
+    src
+)
