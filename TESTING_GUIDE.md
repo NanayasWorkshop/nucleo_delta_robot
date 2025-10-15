@@ -216,14 +216,171 @@ cd ~/zephyrproject && west build -b nucleo_h753zi /path/to/nucleo-firmware && we
 
 ---
 
-## Phase 3: Packet Protocol (Coming Soon)
+## Phase 3: Packet Protocol
 
-Will add:
-- Binary packet parsing (EMERGENCY_STOP, TRAJECTORY, etc.)
-- CRC16 validation
-- UDP/TCP packet handling
+### What Phase 3 Adds:
+- Binary packet protocol implementation
+- CRC16-CCITT checksum validation
+- TCP server for command packets (port 5000)
+- UDP server for emergency stop (port 6000)
+- Packet parsing and handling:
+  - EMERGENCY_STOP (UDP)
+  - SET_MODE (TCP)
+  - START_HOMING (TCP)
+  - JOG_MOTOR (TCP)
+  - SET_ZERO_OFFSET (TCP)
+  - TRAJECTORY (TCP)
+- Feedback packet generation:
+  - DIAGNOSTICS (sent at 1 Hz via TCP)
+  - MOTOR_STATE (not yet implemented)
 
-Testing will involve sending actual command packets from Master PC.
+### Testing Steps:
+
+1. **Flash Phase 3 firmware:**
+   ```bash
+   cd ~/zephyrproject
+   west build -b nucleo_h753zi /home/yuuki/claude-projects/delta_robot/workspace/dev-boards/nucleo-firmware --pristine
+   west flash
+   ```
+
+2. **Monitor serial console:**
+   ```bash
+   minicom -D /dev/ttyACM0 -b 115200
+   ```
+
+3. **Expected output:**
+   ```
+   ========================================
+     Segment Controller Firmware
+   ========================================
+   Board: nucleo_h753zi
+   Zephyr Version: 4.2.99
+   ========================================
+
+   [Phase 1] Basic Bringup - SUCCESS
+
+   [Phase 2] Initializing Network...
+   Network interface found: eth0
+   DHCP event handler registered
+   Starting DHCP client...
+   Waiting for IP address (this may take 10-30 seconds)...
+
+   === DHCP Success ===
+   IP Address assigned: 192.168.1.100
+   Network is ready!
+   ====================
+
+   [Phase 3] Packet Protocol - READY
+   Listening for commands on:
+     - TCP port 5000 (trajectory, config)
+     - UDP port 6000 (emergency stop)
+
+   Ready to receive packets at: 192.168.1.100
+
+   [TCP] Waiting for client connection on port 5000...
+   [UDP] Server thread started on port 6000
+   ```
+
+4. **Run interactive tests:**
+   ```bash
+   cd /home/yuuki/claude-projects/delta_robot/workspace/dev-boards/nucleo-firmware
+
+   # Interactive mode (recommended for first test)
+   python3 tools/test_phase3_packets.py 192.168.1.100 interactive
+   ```
+
+   Interactive menu:
+   ```
+   Available tests:
+     1. Send EMERGENCY_STOP (UDP)
+     2. Send SET_MODE IDLE (TCP)
+     3. Send SET_MODE HOMING (TCP)
+     4. Send SET_MODE OPERATION (TCP)
+     5. Listen for DIAGNOSTICS packets (5s)
+     6. Send simple test trajectory
+     q. Quit
+   ```
+
+5. **Test sequence:**
+
+   **Test 1: Connect and receive DIAGNOSTICS**
+   - In interactive menu, select option 5
+   - Should receive DIAGNOSTICS packets every 1 second
+   - Expected output:
+     ```
+     Received packet #1: 26 bytes
+       Segment ID: 0
+       Timestamp: 12345 ms
+       TMC9660 Temp: 0.0°C
+       STM32 Temp: 25.0°C
+       Error Count: 0
+       Last Error: 0x00
+       CPU Usage: 0%
+     ```
+
+   **Test 2: Send SET_MODE**
+   - Select option 2 (SET_MODE IDLE)
+   - Serial console should show:
+     ```
+     [TCP] Client connected from 192.168.1.X:XXXXX
+     [TCP] Received 7 bytes
+     [Command] Received SET_MODE packet
+     ```
+
+   **Test 3: Send EMERGENCY_STOP**
+   - Select option 1 (EMERGENCY_STOP)
+   - Serial console should show:
+     ```
+     [UDP] Received 7 bytes
+     [Command] EMERGENCY_STOP received!
+     ```
+
+   **Test 4: Send TRAJECTORY**
+   - Select option 6 (test trajectory)
+   - Serial console should show:
+     ```
+     [TCP] Received 112 bytes
+     [Command] Received TRAJECTORY packet
+     ```
+
+6. **Run automated tests:**
+   ```bash
+   python3 tools/test_phase3_packets.py 192.168.1.100 auto
+   ```
+
+7. **Success criteria:**
+   - ✓ TCP and UDP servers start successfully
+   - ✓ DIAGNOSTICS packets received at 1 Hz
+   - ✓ SET_MODE command parsed and logged
+   - ✓ EMERGENCY_STOP received via UDP
+   - ✓ TRAJECTORY command parsed and logged
+   - ✓ All packets have valid CRC checksums
+   - ✓ No CRC errors reported
+
+8. **If it fails:**
+
+   **Cannot connect to TCP port:**
+   - Check firewall: `sudo ufw status`
+   - Verify board IP: Check serial console for "Ready to receive packets at: X.X.X.X"
+   - Try: `telnet 192.168.1.100 5000` (should connect)
+
+   **CRC errors:**
+   - This indicates Python tool and firmware CRC don't match
+   - Check that both use CRC16-CCITT (polynomial 0x1021, init 0xFFFF)
+
+   **No DIAGNOSTICS packets:**
+   - DIAGNOSTICS only sent if TCP client is connected
+   - Make sure to stay connected (option 5 in interactive mode)
+
+   **Phase 2 still works?**
+   - Yes → Debug Phase 3 packet code
+   - No → Rollback to Phase 2
+
+### Rollback to Phase 2:
+```bash
+git checkout phase2-ready
+cd ~/zephyrproject && west build -b nucleo_h753zi /path/to/nucleo-firmware --pristine && west flash
+```
 
 ---
 
@@ -281,6 +438,7 @@ Output:
 ```
 phase1-ready
 phase2-ready
+phase3-ready
 ```
 
 ### Switch between phases:
@@ -290,6 +448,9 @@ git checkout phase1-ready
 
 # Go to Phase 2
 git checkout phase2-ready
+
+# Go to Phase 3
+git checkout phase3-ready
 
 # Go back to latest
 git checkout master

@@ -12,6 +12,8 @@ project(segment_controller)
 target_sources(app PRIVATE
     src/main.c
     src/network.c
+    src/packet.c
+    src/crc16.c
 )
 
 # Add include directories
