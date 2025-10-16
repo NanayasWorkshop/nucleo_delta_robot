@@ -384,6 +384,143 @@ cd ~/zephyrproject && west build -b nucleo_h753zi /path/to/nucleo-firmware --pri
 
 ---
 
+## Phase 4: IMU Integration
+
+### What Phase 4 Adds:
+- LSM6DSO 6-axis IMU (accelerometer + gyroscope) integration
+- I2C communication on Arduino connector pins D14/D15
+- Madgwick AHRS sensor fusion algorithm
+- Real-time orientation calculation (roll, pitch, yaw)
+- IMU data included in MOTOR_STATE feedback packets
+- 10 Hz IMU update rate (will be 100 Hz in Phase 7)
+
+### Hardware Requirements:
+- LSM6DSO breakout board
+- 4 jumper wires for I2C connection:
+  - VCC → 3.3V (pin on Nucleo)
+  - GND → GND
+  - SDA → D14 (I2C1_SDA)
+  - SCL → D15 (I2C1_SCL)
+
+### Testing Steps:
+
+1. **Connect LSM6DSO to Nucleo:**
+   ```
+   LSM6DSO Breakout    →    Nucleo H753ZI
+   ─────────────────────────────────────────
+   VCC (3.3V)          →    3.3V
+   GND                 →    GND
+   SDA                 →    D14 (I2C1_SDA)
+   SCL                 →    D15 (I2C1_SCL)
+   ```
+
+2. **Flash Phase 4 firmware:**
+   ```bash
+   cd ~/zephyrproject
+   west build -b nucleo_h753zi /home/yuuki/claude-projects/delta_robot/workspace/dev-boards/nucleo-firmware --pristine
+   west flash
+   ```
+
+3. **Monitor serial console:**
+   ```bash
+   minicom -D /dev/ttyACM0 -b 115200
+   ```
+
+4. **Expected output:**
+   ```
+   ========================================
+     Segment Controller Firmware
+   ========================================
+   Board: nucleo_h753zi
+   Zephyr Version: 4.2.99
+   ========================================
+
+   [Phase 1] Basic Bringup - SUCCESS
+
+   [Phase 2] Initializing Network...
+   Network interface found: eth0
+   DHCP event handler registered
+   Starting DHCP client...
+   Waiting for IP address (this may take 10-30 seconds)...
+
+   [Phase 4] Initializing IMU (LSM6DSO)...
+   LSM6DSO device found: lsm6dso@6a
+   Madgwick filter initialized (beta=0.10, freq=100 Hz)
+   [Phase 4] IMU initialized successfully
+
+   === DHCP Success ===
+   IP Address assigned: 192.168.1.100
+   Network is ready!
+   ====================
+
+   [Phase 3] Packet Protocol - READY
+   Listening for commands on:
+     - TCP port 5000 (trajectory, config)
+     - UDP port 6000 (emergency stop)
+
+   Ready to receive packets at: 192.168.1.100
+   ```
+
+5. **Test IMU readings:**
+
+   **Connect to receive MOTOR_STATE packets:**
+   ```bash
+   python3 tools/test_phase3_packets.py 192.168.1.100 interactive
+   # Select option 5 to listen for packets
+   ```
+
+   **You should see orientation data updating:**
+   ```
+   Received MOTOR_STATE packet: 83 bytes
+     IMU Roll:  0.123 rad (7.0°)
+     IMU Pitch: -0.052 rad (-3.0°)
+     IMU Yaw:   0.000 rad (0.0°)
+   ```
+
+   **Physical test:**
+   - Tilt the Nucleo board left/right → Roll changes
+   - Tilt forward/backward → Pitch changes
+   - Rotate around vertical axis → Yaw changes
+
+6. **Success criteria:**
+   - ✓ IMU initialization message appears
+   - ✓ LSM6DSO device found at I2C address 0x6a
+   - ✓ Madgwick filter initialized
+   - ✓ No I2C communication errors
+   - ✓ MOTOR_STATE packets contain non-zero orientation values
+   - ✓ Orientation changes when board is tilted/rotated
+   - ✓ Values are reasonable (±π radians, ±180°)
+
+7. **If it fails:**
+
+   **IMU initialization failed:**
+   - Check I2C wiring (SDA/SCL not swapped)
+   - Verify 3.3V power to LSM6DSO (not 5V!)
+   - Check I2C address: LSM6DSO uses 0x6A (SDO/SA0 pin low) or 0x6B (high)
+   - Try: `i2cdetect -y 1` on another system to verify sensor works
+
+   **IMU initialized but orientation is all zeros:**
+   - Check that imu_update() is being called (should see in logs)
+   - Sensor might be in sleep mode - check ODR configuration
+   - Verify accelerometer/gyro data is non-zero
+
+   **Orientation values drift/unstable:**
+   - Normal for Madgwick without magnetometer
+   - Yaw will drift over time (no absolute reference)
+   - Roll/pitch should be stable when stationary
+
+   **Phase 3 still works?:**
+   - Yes → Debug Phase 4 IMU code
+   - No → Rollback to Phase 3
+
+### Rollback to Phase 3:
+```bash
+git checkout phase3-ready
+cd ~/zephyrproject && west build -b nucleo_h753zi /path/to/nucleo-firmware --pristine && west flash
+```
+
+---
+
 ## Troubleshooting
 
 ### Serial Console Issues:
@@ -439,6 +576,7 @@ Output:
 phase1-ready
 phase2-ready
 phase3-ready
+phase4-ready
 ```
 
 ### Switch between phases:
@@ -451,6 +589,9 @@ git checkout phase2-ready
 
 # Go to Phase 3
 git checkout phase3-ready
+
+# Go to Phase 4
+git checkout phase4-ready
 
 # Go back to latest
 git checkout master

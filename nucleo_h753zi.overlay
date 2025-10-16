@@ -1,0 +1,25 @@
+/*
+ * Device Tree Overlay for Nucleo H753ZI
+ * Adds LSM6DSO IMU on I2C1 (Arduino connector pins D14/D15)
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+&i2c1 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;  /* 400 kHz */
+
+	lsm6dso: lsm6dso@6a {
+		compatible = "st,lsm6dso";
+		reg = <0x6a>;  /* I2C address (SDO/SA0 pin low) */
+		                /* Use 0x6b if SDO/SA0 pin high */
+
+		/* Accelerometer configuration */
+		accel-range = <0>;  /* ±2g (0=2g, 1=16g, 2=4g, 3=8g) */
+		accel-odr = <4>;    /* 104 Hz */
+
+		/* Gyroscope configuration */
+		gyro-range = <6>;  /* ±2000 dps (0=250dps, 1=125dps, 2=500dps, 4=1000dps, 6=2000dps) */
+		gyro-odr = <4>;    /* 104 Hz */
+	};
+};

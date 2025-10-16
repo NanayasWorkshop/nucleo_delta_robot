@@ -6,6 +6,7 @@
 
 #include "packet.h"
 #include "crc16.h"
+#include "imu.h"
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 #include <string.h>
@@ -207,9 +208,14 @@ void packet_build_motor_state(motor_state_packet_t *pkt, uint8_t segment_id)
 	pkt->motor_3_jerk = 0.0f;
 	pkt->motor_3_current = 0.0f;
 
-	pkt->imu_roll = 0.0f;
-	pkt->imu_pitch = 0.0f;
-	pkt->imu_yaw = 0.0f;
+	/* Phase 4: Get real IMU orientation */
+	if (imu_is_valid()) {
+		imu_get_orientation(&pkt->imu_roll, &pkt->imu_pitch, &pkt->imu_yaw);
+	} else {
+		pkt->imu_roll = 0.0f;
+		pkt->imu_pitch = 0.0f;
+		pkt->imu_yaw = 0.0f;
+	}
 
 	pkt->status_flags = packet_get_status_flags();
 

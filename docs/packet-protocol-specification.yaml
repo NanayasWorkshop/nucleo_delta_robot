@@ -1,0 +1,894 @@
+# PACKET PROTOCOL SPECIFICATION
+# Binary packet format for Master ↔ STM32 communication
+
+version: "1.0"
+date: "2025-10-14"
+
+# ================================
+# GENERAL PACKET FORMAT RULES
+# ================================
+
+format_rules:
+  endianness: "Little-endian (native to ARM and x86)"
+  alignment: "Packed structures (__attribute__((packed)))"
+  checksum: "CRC16-CCITT (Zephyr built-in)"
+  checksum_coverage: "Entire packet from magic header to last data byte (excludes CRC itself)"
+
+magic_headers:
+  master_to_stm32: 0xAA55  # uint16_t
+  stm32_to_master: 0xBB55  # uint16_t
+
+# ================================
+# COMMAND PACKETS (Master → STM32)
+# ================================
+
+command_packets:
+  header: 0xAA55
+
+  # ------------------------------------------------------------
+  # 0x01 - TRAJECTORY COMMAND
+  # ------------------------------------------------------------
+  trajectory:
+    type_byte: 0x01
+    description: "Send septic polynomial trajectory for 3 motors"
+    frequency: "5 Hz (every 200ms)"
+    protocol: "TCP (persistent connection, reliable)"
+
+    fields:
+      - name: "magic_header"
+        type: "uint16_t"
+        value: 0xAA55
+        bytes: 2
+
+      - name: "packet_type"
+        type: "uint8_t"
+        value: 0x01
+        bytes: 1
+
+      - name: "segment_id"
+        type: "uint8_t"
+        range: "1-8"
+        bytes: 1
+
+      - name: "trajectory_id"
+        type: "uint32_t"
+        description: "Unique ID, incrementing"
+        bytes: 4
+
+      - name: "start_timestamp"
+        type: "uint32_t"
+        description: "When trajectory starts (ms since boot)"
+        bytes: 4
+
+      - name: "duration_ms"
+        type: "uint16_t"
+        description: "Trajectory duration (typically 200ms)"
+        bytes: 2
+
+      - name: "motor_1_coefficients"
+        type: "float[8]"
+        description: "Septic polynomial [a0, a1, a2, a3, a4, a5, a6, a7] in mm"
+        bytes: 32
+
+      - name: "motor_2_coefficients"
+        type: "float[8]"
+        bytes: 32
+
+      - name: "motor_3_coefficients"
+        type: "float[8]"
+        bytes: 32
+
+      - name: "crc16"
+        type: "uint16_t"
+        description: "CRC16-CCITT of all preceding bytes"
+        bytes: 2
+
+    total_size: 112  # bytes
+
+    notes:
+      - "Trajectory evaluated as: pos(t) = a0 + a1*t + a2*t² + ... + a7*t⁷"
+      - "t is normalized 0.0 to 1.0 over duration_ms"
+      - "Position units: millimeters"
+      
+      aoproved
+
+  # ------------------------------------------------------------
+  # 0x02 - EMERGENCY STOP
+  # ------------------------------------------------------------
+  emergency_stop:
+    type_byte: 0x02
+    description: "Software emergency stop command"
+    frequency: "Rare (emergency only)"
+    protocol: "UDP (fast, occasional loss acceptable)"
+
+    fields:
+      - name: "magic_header"
+        type: "uint16_t"
+        value: 0xAA55
+        bytes: 2
+
+      - name: "packet_type"
+        type: "uint8_t"
+        value: 0x02
+        bytes: 1
+
+      - name: "segment_id"
+        type: "uint8_t"
+        description: "Target segment (0xFF = broadcast all)"
+        bytes: 1
+
+      - name: "stop_reason"
+        type: "uint8_t"
+        description: "Why stopping (0x01=force limit, 0x02=position limit, 0x03=user request)"
+        bytes: 1
+
+      - name: "crc16"
+        type: "uint16_t"
+        bytes: 2
+
+    total_size: 7  # bytes
+
+    action: "STM32 immediately stops motors, generates local deceleration" 
+    
+    appproved
+
+  # ------------------------------------------------------------
+  # 0x03 - START HOMING
+  # ------------------------------------------------------------
+  start_homing:
+    type_byte: 0x03
+    description: "Command segment to begin homing sequence"
+    frequency: "Once per startup"
+    protocol: "TCP"
+
+    fields:
+      - name: "magic_header"
+        type: "uint16_t"
+        value: 0xAA55
+        bytes: 2
+
+      - name: "packet_type"
+        type: "uint8_t"
+        value: 0x03
+        bytes: 1
+
+      - name: "segment_id"
+        type: "uint8_t"
+        bytes: 1
+
+      - name: "homing_mode"
+        type: "uint8_t"
+        description: "0x01=full homing (move to endstops), 0x02=quick verify (check saved positions)"
+        bytes: 1
+
+      - name: "crc16"
+        type: "uint16_t"
+        bytes: 2
+
+    total_size: 7  # bytes
+
+    action: "STM32 executes homing routine (move motors to endstops, zero encoders)"
+    
+    approved
+
+  # NOTE: Commands 0x04, 0x05, 0x06 removed
+  # - 0x04 (SET MOTOR LIMITS): Limits are hardcoded in firmware
+  # - 0x05 (ZERO ENCODERS): STM32 handles autonomously during homing
+  # - 0x06 (SAVE CALIBRATION): STM32 auto-saves after successful homing
+
+  # ------------------------------------------------------------
+  # 0x07 - JOG MOTOR (for calibration)
+  # ------------------------------------------------------------
+  jog_motor:
+    type_byte: 0x07
+    description: "Manually move single motor for calibration"
+    frequency: "Manual, during calibration only"
+    protocol: "TCP"
+    use_case: "External calibration tool adjusts motor position for zero offset calibration"
+
+    fields:
+      - name: "magic_header"
+        type: "uint16_t"
+        value: 0xAA55
+        bytes: 2
+
+      - name: "packet_type"
+        type: "uint8_t"
+        value: 0x07
+        bytes: 1
+
+      - name: "segment_id"
+        type: "uint8_t"
+        bytes: 1
+
+      - name: "motor_id"
+        type: "uint8_t"
+        description: "Motor to jog (1, 2, or 3)"
+        range: "1-3"
+        bytes: 1
+
+      - name: "mode"
+        type: "uint8_t"
+        description: "0x01=millimeters, 0x02=encoder ticks"
+        bytes: 1
+
+      - name: "value"
+        type: "float"
+        description: "Distance to move (can be negative)"
+        bytes: 4
+
+      - name: "speed_percent"
+        type: "uint8_t"
+        description: "Speed as percentage of nominal (0-100%)"
+        bytes: 1
+
+      - name: "crc16"
+        type: "uint16_t"
+        bytes: 2
+
+    total_size: 13  # bytes
+
+    action: "STM32 moves specified motor by given distance at specified speed"
+
+    notes:
+      - "Used during initial calibration with external tool"
+      - "Nominal speed = 2.33 mm/s continuous"
+      - "Speed_percent=50 → 1.17 mm/s"
+
+  # ------------------------------------------------------------
+  # 0x08 - SET MODE
+  # ------------------------------------------------------------
+  set_mode:
+    type_byte: 0x08
+    description: "Change STM32 operating mode"
+    frequency: "Few times per session"
+    protocol: "TCP"
+
+    fields:
+      - name: "magic_header"
+        type: "uint16_t"
+        value: 0xAA55
+        bytes: 2
+
+      - name: "packet_type"
+        type: "uint8_t"
+        value: 0x08
+        bytes: 1
+
+      - name: "segment_id"
+        type: "uint8_t"
+        bytes: 1
+
+      - name: "mode"
+        type: "uint8_t"
+        description: "0x01=IDLE, 0x02=HOMING, 0x03=OPERATION"
+        bytes: 1
+
+      - name: "crc16"
+        type: "uint16_t"
+        bytes: 2
+
+    total_size: 7  # bytes
+
+    modes:
+      IDLE:
+        value: 0x01
+        description: "Motors disabled, system idle"
+      HOMING:
+        value: 0x02
+        description: "Homing sequence active"
+      OPERATION:
+        value: 0x03
+        description: "Normal trajectory following"
+        
+        approved
+
+  # ------------------------------------------------------------
+  # 0x09 - SET ZERO OFFSET
+  # ------------------------------------------------------------
+  set_zero_offset:
+    type_byte: 0x09
+    description: "Save current motor positions as zero offsets"
+    frequency: "Once during initial calibration"
+    protocol: "TCP"
+    use_case: "After jogging all motors to correct height, save offsets to compensate for manufacturing tolerances"
+
+    fields:
+      - name: "magic_header"
+        type: "uint16_t"
+        value: 0xAA55
+        bytes: 2
+
+      - name: "packet_type"
+        type: "uint8_t"
+        value: 0x09
+        bytes: 1
+
+      - name: "segment_id"
+        type: "uint8_t"
+        bytes: 1
+
+      - name: "crc16"
+        type: "uint16_t"
+        bytes: 2
+
+    total_size: 6  # bytes
+
+    action: "STM32 calculates offset for all 3 motors and saves to flash"
+
+    calibration_procedure:
+      - "STM32 homes all motors (light barrier + 10.4mm)"
+      - "External tool jogs motors to align heights"
+      - "External tool sends SET_ZERO_OFFSET command"
+      - "STM32 calculates: offset[i] = current_position[i] - 10.4mm for each motor"
+      - "STM32 saves 3 offsets to Zephyr NVS flash storage"
+      - "Future homing: position = light_barrier + 10.4mm + saved_offset[i]"
+
+    notes:
+      - "Compensates for ±0.15mm tolerance in light barrier positioning"
+      - "Saves all 3 motor offsets simultaneously"
+      - "Offsets automatically applied during all subsequent homing operations"
+
+  # ------------------------------------------------------------
+  # 0x0D - SET IMU CALIBRATION (FUTURE)
+  # ------------------------------------------------------------
+  set_imu_calibration:
+    type_byte: 0x0D
+    status: "FUTURE - implement during calibration phase"
+    description: "Send IMU orientation offset"
+    
+    keep it but we dont imolment it but iwl be usefull mayb ein future.
+
+  # ------------------------------------------------------------
+  # 0x0E - SET CAPACITIVE BASELINE (FUTURE) same here keep for fitute. dont implment yet
+  # ------------------------------------------------------------
+  set_capacitive_baseline:
+    type_byte: 0x0E
+    status: "FUTURE - implement when capacitive grid available"
+    description: "Send capacitive sensor baseline values"
+
+# ================================
+# FEEDBACK PACKETS (STM32 → Master)
+# ================================
+
+feedback_packets:
+  header: 0xBB55
+
+  # ------------------------------------------------------------
+  # 0x01 - MOTOR STATE (HIGH RATE)
+  # ------------------------------------------------------------
+  motor_state:
+    type_byte: 0x01
+    description: "Motor positions, velocities, accelerations, currents"
+    frequency: "100 Hz"
+    protocol: "UDP"
+
+    fields:
+      - name: "magic_header"
+        type: "uint16_t"
+        value: 0xBB55
+        bytes: 2
+
+      - name: "packet_type"
+        type: "uint8_t"
+        value: 0x01
+        bytes: 1
+
+      - name: "segment_id"
+        type: "uint8_t"
+        bytes: 1
+
+      - name: "timestamp"
+        type: "uint32_t"
+        description: "Time in ms since STM32 boot"
+        bytes: 4
+
+      - name: "motor_1_position"
+        type: "float"
+        description: "Position in mm"
+        bytes: 4
+
+      - name: "motor_1_velocity"
+        type: "float"
+        description: "Velocity in mm/s"
+        bytes: 4
+
+      - name: "motor_1_acceleration"
+        type: "float"
+        description: "Acceleration in mm/s²"
+        bytes: 4
+
+      - name: "motor_1_jerk"
+        type: "float"
+        description: "Jerk in mm/s³"
+        bytes: 4
+
+      - name: "motor_1_current"
+        type: "float"
+        description: "Motor current in Amps"
+        bytes: 4
+
+      - name: "motor_2_position"
+        type: "float"
+        bytes: 4
+
+      - name: "motor_2_velocity"
+        type: "float"
+        bytes: 4
+
+      - name: "motor_2_acceleration"
+        type: "float"
+        bytes: 4
+
+      - name: "motor_2_jerk"
+        type: "float"
+        bytes: 4
+
+      - name: "motor_2_current"
+        type: "float"
+        bytes: 4
+
+      - name: "motor_3_position"
+        type: "float"
+        bytes: 4
+
+      - name: "motor_3_velocity"
+        type: "float"
+        bytes: 4
+
+      - name: "motor_3_acceleration"
+        type: "float"
+        bytes: 4
+
+      - name: "motor_3_jerk"
+        type: "float"
+        bytes: 4
+
+      - name: "motor_3_current"
+        type: "float"
+        bytes: 4
+
+      - name: "imu_roll"
+        type: "float"
+        description: "Roll angle in radians"
+        bytes: 4
+
+      - name: "imu_pitch"
+        type: "float"
+        description: "Pitch angle in radians"
+        bytes: 4
+
+      - name: "imu_yaw"
+        type: "float"
+        description: "Yaw angle in radians"
+        bytes: 4
+
+      - name: "status_flags"
+        type: "uint8_t"
+        description: "Status bits (see status_flags section)"
+        bytes: 1
+
+      - name: "crc16"
+        type: "uint16_t"
+        bytes: 2
+
+    total_size: 83  # bytes
+
+    notes:
+      - "Jerk = 3rd derivative of position (rate of change of acceleration)"
+      - "Continuous jerk = smooth motion (no vibration/shaking)"
+      - "Calculated from encoder feedback: jerk = (accel_now - accel_prev) / dt"
+      - "Septic polynomials guarantee continuous jerk for comfortable motion"
+
+    approved
+
+  # ------------------------------------------------------------
+  # 0x02 - CAPACITIVE GRID (MEDIUM RATE)
+  # ------------------------------------------------------------
+  capacitive_grid:
+    type_byte: 0x02
+    description: "Capacitive sensor grid raw values"
+    frequency: "30 Hz"
+    protocol: "UDP"
+
+    fields:
+      - name: "magic_header"
+        type: "uint16_t"
+        value: 0xBB55
+        bytes: 2
+
+      - name: "packet_type"
+        type: "uint8_t"
+        value: 0x02
+        bytes: 1
+
+      - name: "segment_id"
+        type: "uint8_t"
+        bytes: 1
+
+      - name: "timestamp"
+        type: "uint32_t"
+        bytes: 4
+
+      - name: "capacitive_values"
+        type: "uint16_t[168]"
+        description: "Raw capacitance values (168 sensing points)"
+        bytes: 336
+
+      - name: "crc16"
+        type: "uint16_t"
+        bytes: 2
+
+    total_size: 346  # bytes
+    
+    approved
+
+  # ------------------------------------------------------------
+  # 0x03 - DIAGNOSTICS (LOW RATE)
+  # ------------------------------------------------------------
+  diagnostics:
+    type_byte: 0x03
+    description: "Temperature, errors, status info"
+    frequency: "1 Hz"
+    protocol: "TCP"
+
+    fields:
+      - name: "magic_header"
+        type: "uint16_t"
+        value: 0xBB55
+        bytes: 2
+
+      - name: "packet_type"
+        type: "uint8_t"
+        value: 0x03
+        bytes: 1
+
+      - name: "segment_id"
+        type: "uint8_t"
+        bytes: 1
+
+      - name: "timestamp"
+        type: "uint32_t"
+        bytes: 4
+
+      - name: "tmc9660_temp_avg"
+        type: "float"
+        description: "Average temperature of 3 TMC9660 drivers in °C"
+        bytes: 4
+
+      - name: "stm32_temp"
+        type: "float"
+        description: "STM32 internal temperature in °C"
+        bytes: 4
+
+      - name: "error_count"
+        type: "uint16_t"
+        description: "Number of errors since boot"
+        bytes: 2
+
+      - name: "last_error_code"
+        type: "uint8_t"
+        description: "Most recent error (see error_codes section)"
+        bytes: 1
+
+      - name: "cpu_usage"
+        type: "uint8_t"
+        description: "CPU usage percentage (0-100)"
+        bytes: 1
+
+      - name: "crc16"
+        type: "uint16_t"
+        bytes: 2
+
+    total_size: 26  # bytes
+
+    notes:
+      - "TMC9660 temperatures read via SPI registers"
+      - "Average of 3 drivers sent to reduce packet size"
+      - "STM32 internal temp sensor via ADC"
+    
+    approved
+
+# ================================
+# STATUS FLAGS (in motor_state packet)
+# ================================
+
+status_flags:
+  description: "Bit field in motor_state packet (uint8_t)"
+
+  bits:
+    bit_0:
+      name: "E_STOP_ACTIVE"
+      description: "Hardware or software e-stop triggered"
+
+    bit_1:
+      name: "HOMING_IN_PROGRESS"
+      description: "Currently executing homing sequence"
+
+    bit_2:
+      name: "POSITION_LIMIT_HIT"
+      description: "One or more motors at position limit"
+
+    bit_3:
+      name: "FORCE_LIMIT_EXCEEDED"
+      description: "Motor current exceeds safe threshold"
+
+    bit_4:
+      name: "BUFFER_EMPTY"
+      description: "Rolling buffer empty, executing local deceleration"
+
+    bit_5:
+      name: "TRAJECTORY_EXECUTING"
+      description: "Currently following trajectory from buffer"
+
+    bit_6:
+      name: "CALIBRATION_VALID"
+      description: "Calibration data loaded and valid"
+
+    bit_7:
+      name: "ERROR_PRESENT"
+      description: "Error occurred (see diagnostics packet for details)"
+
+  notes:
+    - "Motor state sent @ 100 Hz, diagnostics sent @ 1 Hz"
+    - "ERROR_PRESENT bit allows Master to detect errors within 10ms"
+    - "Master reads next diagnostics packet for error_code details"
+    - "Without this bit, Master waits up to 1 second to discover error"
+
+# ================================
+# ERROR CODES (in diagnostics packet)
+# ================================
+
+error_codes:
+  description: "Error codes reported in diagnostics packet"
+
+  codes:
+    0x00:
+      name: "NO_ERROR"
+      description: "No error"
+
+    0x01:
+      name: "E_STOP_TRIGGERED"
+      description: "E-stop activated"
+      severity: "CRITICAL"
+
+    0x02:
+      name: "MOTOR_OVERCURRENT"
+      description: "Motor current exceeded limit"
+      severity: "CRITICAL"
+
+    0x03:
+      name: "POSITION_LIMIT"
+      description: "Motor hit position limit"
+      severity: "WARNING"
+
+    0x04:
+      name: "COMMUNICATION_TIMEOUT"
+      description: "No trajectory received within timeout"
+      severity: "CRITICAL"
+
+    0x05:
+      name: "CRC_ERROR"
+      description: "Packet CRC check failed"
+      severity: "WARNING"
+
+    0x06:
+      name: "INVALID_TRAJECTORY"
+      description: "Trajectory packet malformed or out of sequence"
+      severity: "WARNING"
+
+    0x07:
+      name: "ENCODER_FAULT"
+      description: "Encoder reading error"
+      severity: "CRITICAL"
+
+    0x08:
+      name: "TMC9660_FAULT"
+      description: "Motor driver reported fault"
+      severity: "CRITICAL"
+
+    0x09:
+      name: "IMU_FAULT"
+      description: "IMU communication or data error"
+      severity: "WARNING"
+
+    0x0A:
+      name: "CAPACITIVE_FAULT"
+      description: "Capacitive sensor communication error"
+      severity: "WARNING"
+
+    0x0B:
+      name: "FLASH_ERROR"
+      description: "Calibration data read/write failed"
+      severity: "WARNING"
+
+    0x0C:
+      name: "BUFFER_OVERRUN"
+      description: "Trajectory buffer full, packet dropped"
+      severity: "WARNING"
+
+    0x0D:
+      name: "TEMPERATURE_HIGH"
+      description: "Temperature exceeds safe threshold"
+      severity: "WARNING"
+      
+      solid apöroved
+
+# ================================
+# IMPLEMENTATION NOTES
+# ================================
+
+implementation_notes:
+
+  crc_calculation:
+    algorithm: "CRC16-CCITT (polynomial 0x1021, initial 0xFFFF)"
+    zephyr_function: "crc16_ccitt(initial, data, length)"
+    coverage: "All bytes from magic_header to last data field (excludes CRC itself)"
+
+    example_c:
+      - "#include <zephyr/sys/crc.h>"
+      - "uint16_t crc = crc16_ccitt(0xFFFF, packet_buffer, packet_size - 2);"
+
+  struct_packing:
+    - "Use __attribute__((packed)) on all packet structs"
+    - "Verify struct size matches expected byte count"
+    - "Example: static_assert(sizeof(trajectory_packet_t) == 112);"
+
+  endianness:
+    - "Little-endian is native to STM32 and x86"
+    - "No byte swapping needed"
+    - "Network byte order (big-endian) NOT used - this is application protocol"
+
+  timestamp:
+    - "Use Zephyr k_uptime_get_32() for ms since boot"
+    - "Wraps after 49.7 days - acceptable for trajectory IDs"
+    - "Master can detect wrap and handle accordingly"
+
+  trajectory_evaluation:
+    - "Normalize time: t = (current_time - start_timestamp) / duration_ms"
+    - "Evaluate polynomial: pos = a0 + a1*t + a2*t² + ... + a7*t⁷"
+    - "Use Horner's method for efficiency: pos = a0 + t*(a1 + t*(a2 + t*(...)))"
+
+  udp_vs_tcp:
+    - "UDP: Fast, occasional loss acceptable (motor state, capacitive)"
+    - "TCP: Reliable, order guaranteed (trajectories, config, diagnostics)"
+    - "Emergency stop uses UDP (speed more important than guaranteed delivery)"
+
+# ================================
+# BANDWIDTH ANALYSIS
+# ================================
+
+bandwidth:
+
+  upstream_stm32_to_master:
+    motor_state:
+      packet_size: 83  # bytes
+      frequency: 100  # Hz
+      bandwidth_per_segment: 66400  # bits/sec = 64.8 kbps
+      bandwidth_8_segments: 531200  # bits/sec = 519 kbps
+
+    capacitive_grid:
+      packet_size: 346  # bytes
+      frequency: 30  # Hz
+      bandwidth_per_segment: 83040  # bits/sec = 81 kbps
+      bandwidth_8_segments: 664320  # bits/sec = 649 kbps
+
+    diagnostics:
+      packet_size: 18  # bytes
+      frequency: 1  # Hz
+      bandwidth_per_segment: 144  # bits/sec = 0.14 kbps
+      bandwidth_8_segments: 1152  # bits/sec = 1.1 kbps
+
+    total_upstream: 1196672  # bits/sec = 1.14 Mbps (1.14% of 100 Mbps Ethernet)
+
+  downstream_master_to_stm32:
+    trajectory:
+      packet_size: 112  # bytes
+      frequency: 5  # Hz
+      bandwidth_per_segment: 4480  # bits/sec = 4.4 kbps
+      bandwidth_8_segments: 35840  # bits/sec = 35 kbps
+
+    commands:
+      packet_size: 7  # bytes average
+      frequency: 0.1  # Hz (occasional)
+      bandwidth: 56  # bits/sec (negligible)
+
+    total_downstream: 35896  # bits/sec = 35 kbps (0.035% of 100 Mbps Ethernet)
+
+  total_bidirectional: 1232568  # bits/sec = 1.18 Mbps
+  ethernet_utilization: "1.18% of 100 Mbps (excellent headroom)"
+
+# ================================
+# NETWORK CONFIGURATION
+# ================================
+
+network_configuration:
+
+  ip_addressing:
+    method: "DHCP (Dynamic Host Configuration Protocol)"
+    implementation: "Zephyr built-in DHCP client"
+
+    master:
+      role: "DHCP server"
+      ip: "192.168.1.1"
+      subnet: "255.255.255.0 (/24)"
+      dhcp_range: "192.168.1.100 - 192.168.1.200"
+
+    segments:
+      role: "DHCP clients"
+      behavior: "Request IP from Master on boot"
+      expected_ips: "192.168.1.100 - 192.168.1.107 (8 segments)"
+
+    segment_identification:
+      method: "Manual mapping during calibration"
+      procedure:
+        - "Power on all segments"
+        - "Master DHCP server assigns IPs automatically"
+        - "Master UI shows list of discovered devices"
+        - "User physically identifies each segment (e.g., wiggle segment 1)"
+        - "User assigns segment_id (1-8) to each IP in Master UI"
+        - "Master saves mapping to config file"
+        - "All packets include segment_id field for identification"
+
+      rationale:
+        - "Physical segment position matters (lower affects upper)"
+        - "Assignment done during assembly/calibration"
+        - "Allows flexible board replacement without reprogramming"
+        - "All STM32 boards have identical firmware"
+
+  ports:
+    commands_tcp:
+      port: 5000
+      direction: "Master → STM32"
+      protocol: "TCP (persistent connection)"
+      usage: "Trajectory commands, configuration, mode changes"
+
+    feedback_udp:
+      port: 6000
+      direction: "STM32 → Master"
+      protocol: "UDP"
+      usage: "Motor state (100 Hz), capacitive grid (30 Hz)"
+
+    diagnostics_tcp:
+      port: 5000  # Same as commands
+      direction: "STM32 → Master"
+      protocol: "TCP (same connection as commands)"
+      usage: "Diagnostics packets (1 Hz)"
+
+    emergency_udp:
+      port: 5000  # Same port, but UDP
+      direction: "Master → STM32"
+      protocol: "UDP"
+      usage: "Emergency stop commands (fast, unreliable acceptable)"
+
+  connection_management:
+    tcp_connection:
+      type: "Persistent"
+      behavior: "Established on STM32 boot, maintained throughout operation"
+      reconnect: "STM32 attempts reconnect if connection lost"
+
+    udp_sockets:
+      type: "Stateless"
+      behavior: "Always open, no connection state"
+
+  zephyr_configuration:
+    required_config:
+      - "CONFIG_NETWORKING=y"
+      - "CONFIG_NET_IPV4=y"
+      - "CONFIG_NET_DHCPV4=y"
+      - "CONFIG_NET_TCP=y"
+      - "CONFIG_NET_UDP=y"
+      - "CONFIG_NET_SOCKETS=y"
+      - "CONFIG_ETH_STM32_HAL=y"
+      - "CONFIG_NET_L2_ETHERNET=y"
+
+# ================================
+# NEXT STEPS
+# ================================
+
+next_steps:
+  - "Review and edit this specification"
+  - "Define any missing commands or feedback packets"
+  - "Create C header file (packets.h) from this spec"
+  - "Implement packet packing/unpacking functions"
+  - "Write unit tests for CRC calculation"

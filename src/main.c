@@ -1,5 +1,5 @@
 /*
- * Segment Controller Firmware - Phase 3: Packet Protocol
+ * Segment Controller Firmware - Phase 4: IMU Integration
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -9,12 +9,14 @@
 #include <zephyr/version.h>
 #include "network.h"
 #include "packet.h"
+#include "imu.h"
 
 /* Segment ID - default 0 (unconfigured) */
 #define MY_SEGMENT_ID 0
 
 /* Feedback thread timing */
 #define DIAGNOSTICS_INTERVAL_MS 1000  /* 1 Hz */
+#define IMU_UPDATE_INTERVAL_MS 100     /* 10 Hz (will be 100 Hz in Phase 7) */
 
 static bool servers_started = false;
 
@@ -23,6 +25,7 @@ int main(void)
 	int ret;
 	char ip_addr[32];
 	uint32_t last_diag_time = 0;
+	uint32_t last_imu_time = 0;
 
 	printk("\n");
 	printk("========================================\n");
@@ -48,6 +51,13 @@ int main(void)
 	printk("[Phase 2] Network initialization started\n");
 	printk("Waiting for DHCP to assign IP address...\n\n");
 
+	/* Phase 4: Initialize IMU */
+	ret = imu_init();
+	if (ret < 0) {
+		printk("Warning: IMU initialization failed: %d\n", ret);
+		printk("Continuing without IMU (orientation will be zeros)\n\n");
+	}
+
 	/* Main loop */
 	while (1) {
 		k_sleep(K_SECONDS(1));
@@ -72,8 +82,20 @@ int main(void)
 				}
 			}
 
-			/* Send diagnostics packet periodically (1 Hz) */
 			uint32_t now = k_uptime_get_32();
+
+			/* Update IMU periodically (10 Hz for now) */
+			if (now - last_imu_time >= IMU_UPDATE_INTERVAL_MS) {
+				if (imu_is_valid()) {
+					ret = imu_update();
+					if (ret < 0) {
+						printk("Warning: IMU update failed: %d\n", ret);
+					}
+				}
+				last_imu_time = now;
+			}
+
+			/* Send diagnostics packet periodically (1 Hz) */
 			if (now - last_diag_time >= DIAGNOSTICS_INTERVAL_MS) {
 				diagnostics_packet_t diag_pkt;
 				packet_build_diagnostics(&diag_pkt, MY_SEGMENT_ID);

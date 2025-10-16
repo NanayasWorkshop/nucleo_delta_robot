@@ -1,0 +1,456 @@
+# HARDWARE CONFIGURATION
+# Motor, sensor, and mechanical specifications for STM32 firmware
+
+version: "1.0"
+date: "2025-10-14"
+
+# ================================
+# MOTOR AND DRIVE SYSTEM
+# ================================
+
+motor_system:
+
+  motor:
+    model: "PBLR38FLS-483130-NH"
+    type: "PMSM (Permanent Magnet Synchronous Motor)"
+    voltage: "48V"
+    torque_rated: "0.1 Nm"
+    torque_peak: "0.3 Nm"
+
+  harmonic_drive:
+    model: "Model 11"
+    ratio: 50
+    torque_continuous: "3.5 Nm output @ 2000 RPM input"
+    torque_peak: "8.3 Nm output (start/stop)"
+    max_input_speed_continuous: 3500  # RPM (with grease)
+    max_input_speed_peak: 8500  # RPM (brief bursts)
+    backlash: "≤10 arc-sec"
+
+  leadscrew:
+    model: "TR8×2"
+    lead: "2 mm/rev"
+    efficiency: 0.45
+
+  encoder:
+    type: "Custom optical encoder"
+    slits: 144
+    quadrature: true
+    counts_per_rev: 576  # 144 slits × 4 (quadrature)
+    location: "Motor shaft (before harmonic drive)"
+
+# ================================
+# CONVERSION FACTORS
+# ================================
+
+conversions:
+
+  encoder_to_position:
+    motor_encoder_resolution: 576  # counts/rev at motor shaft
+    harmonic_ratio: 50
+    leadscrew_lead_mm: 2.0
+
+    calculation:
+      counts_per_motor_rev: 576
+      counts_per_leadscrew_rev: 28800  # 576 × 50
+      mm_per_leadscrew_rev: 2.0
+      mm_per_count: 0.00006944  # 2.0 / 28800
+      counts_per_mm: 14400  # 28800 / 2.0
+
+    formula: "position_mm = encoder_counts × (2.0 / 28800)"
+    inverse: "encoder_counts = position_mm × 14400"
+
+  velocity_limits:
+    continuous_rpm: 3500  # Motor RPM
+    continuous_leadscrew_rpm: 70  # 3500 / 50
+    continuous_mm_per_min: 140  # 70 × 2
+    continuous_mm_per_sec: 2.33  # 140 / 60
+
+    peak_rpm: 8500  # Motor RPM
+    peak_leadscrew_rpm: 170  # 8500 / 50
+    peak_mm_per_min: 340  # 170 × 2
+    peak_mm_per_sec: 5.67  # 340 / 60
+
+    velocity_safety:
+      nominal_max: 2.33  # mm/s (safe for continuous operation)
+      peak_max: 5.67  # mm/s (short bursts only)
+      rolling_average_window: 16.0  # seconds
+      rolling_average_samples: 1600  # @ 100 Hz
+      rolling_average_limit: 2.33  # mm/s (trigger warning if exceeded)
+
+# ================================
+# POSITION LIMITS
+# ================================
+
+position_limits:
+
+  stroke_length: 20.8  # mm total travel
+  minimum_position: -10.4  # mm
+  maximum_position: +10.4  # mm
+  home_offset: 10.4  # mm above bottom endstop
+
+  light_barrier_tolerance: 0.3  # mm (sensing range)
+  calibration_tolerance: 0.15  # mm (±0.15mm)
+
+  homing_procedure:
+    step_1: "Drive motor down to light barrier (optical sensor detects full submersion)"
+    step_2: "Move up by 10.4mm"
+    step_3: "Set this position as zero reference"
+    step_4: "Apply saved offsets from calibration (if available)"
+
+    position_after_homing: "0mm (calibrated zero for all 3 motors)"
+    range_after_homing: "±10.4mm"
+
+# ================================
+# HOMING SYSTEM
+# ================================
+
+homing:
+
+  light_barrier:
+    model: "EE-SY199 or similar"
+    type: "Optical photointerrupter (reflective)"
+    sensing_distance: "~1mm"
+    sensing_range: "0.3mm (linear response)"
+    response_time: "20µs"
+
+    signal_output:
+      type: "Analog (phototransistor)"
+      interface: "STM32 ADC"
+      voltage_range: "0-3.3V"
+      signal_interpretation:
+        fully_submerged: "Signal minimum (full blockage)"
+        partially_submerged: "Linear interpolation (0-0.3mm depth)"
+        not_submerged: "Signal maximum (no blockage)"
+
+    circuit:
+      description: "Phototransistor + external resistor → voltage output"
+      details: "TBD during PCB design"
+
+  homing_speeds:
+    fast_approach:
+      speed_mm_s: 1.17  # 50% of nominal
+      condition: "When calibration data exists in flash"
+      transition: "Slow down when approaching expected position"
+
+    slow_approach:
+      speed_mm_s: 0.47  # 20% of nominal
+      condition: "Near light barrier or during first homing"
+      purpose: "Accurate position detection"
+
+    nominal_speed: 2.33  # mm/s (100% reference)
+
+  homing_strategy:
+    full_homing:
+      when: "First boot, or calibration invalid"
+      steps:
+        - "Move down at slow speed until light barrier signal detected"
+        - "Find center of 0.3mm sensing range"
+        - "Move up by 10.4mm"
+        - "Set as zero reference"
+
+    quick_verify:
+      when: "Valid calibration exists in flash"
+      steps:
+        - "Move down at fast speed (50%) toward expected position"
+        - "Slow down to 20% near expected barrier"
+        - "Verify light barrier signal"
+        - "Apply saved offsets"
+
+# ================================
+# CALIBRATION SYSTEM
+# ================================
+
+calibration:
+
+  zero_offset_calibration:
+    purpose: "Compensate for ±0.15mm tolerance in light barrier positioning across 3 motors"
+
+    procedure:
+      step_1: "STM32 homes all 3 motors (light barrier + 10.4mm)"
+      step_2: "External calibration tool measures actual heights"
+      step_3: "Motors will be at slightly different heights due to manufacturing tolerance"
+      step_4: "External tool sends JOG_MOTOR commands to adjust each motor"
+      step_5: "When all motors at correct height, external tool sends SET_ZERO_OFFSET"
+      step_6: "STM32 calculates: offset[i] = current_position[i] - 10.4mm"
+      step_7: "STM32 saves 3 offsets to Zephyr NVS flash"
+
+    usage:
+      after_calibration: "All future homing applies saved offsets automatically"
+      formula: "final_position[i] = light_barrier + 10.4mm + saved_offset[i]"
+
+  calibration_data_storage:
+    location: "Zephyr NVS (Non-Volatile Storage) in STM32 flash"
+    wear_leveling: "Built-in via Zephyr NVS"
+
+    data_structure:
+      motor_zero_offsets: "3× float (mm)"
+      encoder_zero_positions: "3× int32 (ticks)"
+      imu_orientation_offset: "4× float (quaternion)"
+      capacitive_baseline: "168× uint16 (raw ADC values)"
+      total_size: "~400 bytes"
+
+# ================================
+# MOTOR CONTROLLER (TMC9660)
+# ================================
+
+motor_controller:
+
+  model: "TMC9660"
+  manufacturer: "Analog Devices (Trinamic)"
+  interface: "SPI @ 1 MHz"
+  control_mode: "FOC (Field-Oriented Control)"
+
+  current_limiting:
+    continuous_current: 2.4  # A
+    peak_current: 5.5  # A
+
+    hardware_limiting:
+      method: "TMC9660 built-in hardware current limiter"
+      implementation: "Set via IHOLD_IRUN register"
+      behavior: "Hard limit - cannot be exceeded even if software fails"
+      configuration: "TBD - detailed register values in separate TMC9660 config doc"
+
+    software_monitoring:
+      warning_threshold: 3.0  # A (125% of continuous)
+      critical_threshold: 5.5  # A (trigger e-stop)
+      read_frequency: 100  # Hz (every motor control cycle)
+      action_on_warning: "Log warning, monitor closely"
+      action_on_critical: "Trigger emergency stop, generate local deceleration"
+
+  temperature_sensing:
+    method: "TMC9660 internal temperature sensor"
+    interface: "Read via SPI registers"
+    frequency: 1  # Hz (sent in diagnostics packet)
+    aggregation: "Average of 3 TMC9660 temps reported to Master"
+
+  registers_to_configure:
+    note: "Detailed register configuration in separate document"
+    key_registers:
+      - "IHOLD_IRUN - current limits"
+      - "CHOPCONF - chopper configuration for FOC"
+      - "PWMCONF - PWM settings"
+      - "TPOWERDOWN - motor standby timeout"
+      - "Encoder settings - resolution and direction"
+
+# ================================
+# IMU (Inertial Measurement Unit)
+# ================================
+
+imu:
+
+  model: "LSM6DSO"
+  manufacturer: "STMicroelectronics"
+  interface: "I2C @ 400 kHz (Fast Mode)"
+  i2c_address: "TBD (check LSM6DSO datasheet - typically 0x6A or 0x6B)"
+
+  sensors:
+    accelerometer:
+      range: "±2g (or ±4g, ±8g, ±16g - configurable)"
+      resolution: "16-bit"
+
+    gyroscope:
+      range: "±250 dps (or ±500, ±1000, ±2000 dps - configurable)"
+      resolution: "16-bit"
+
+  sampling:
+    frequency: 100  # Hz
+    synchronization: "Read during sensor acquisition thread"
+
+  sensor_fusion:
+    algorithm: "Madgwick filter"
+    implementation: "Open-source Madgwick library (well-documented, ~200 lines C)"
+    output: "Roll, pitch, yaw (Euler angles in radians)"
+    update_rate: 100  # Hz
+
+    notes:
+      - "Madgwick filter fuses accelerometer + gyroscope data"
+      - "Compensates for gyro drift using accelerometer"
+      - "Good balance of accuracy and computational efficiency"
+      - "Industry standard for robotics applications"
+
+  calibration:
+    procedure: "Measure gravity vector with robot stationary, compute orientation offset"
+    storage: "Save quaternion offset to Zephyr NVS"
+    frequency: "On startup or on-demand"
+
+# ================================
+# CAPACITIVE SENSING GRID
+# ================================
+
+capacitive_grid:
+
+  grid_size:
+    sensing_points: 168
+    data_format: "uint16 raw values"
+    packet_size: 336  # bytes (168 × 2)
+
+  controller:
+    model: "TBD (awaiting Liquid Wire response)"
+    interface: "TBD (likely I2C or SPI)"
+    i2c_address: "TBD"
+    sampling_rate: 30  # Hz (limited by scan time)
+
+  calibration:
+    baseline: "With no touch, record 168 baseline values"
+    storage: "Save to Zephyr NVS (336 bytes)"
+    procedure: "On startup or when drift detected"
+
+  notes:
+    - "Hardware not finalized - waiting on Liquid Wire"
+    - "Firmware interface designed to be flexible (I2C/SPI)"
+    - "Raw values sent to Master for processing"
+
+# ================================
+# SAFETY THRESHOLDS
+# ================================
+
+safety_thresholds:
+
+  temperature:
+    tmc9660_warning: 80  # °C
+    tmc9660_critical: 100  # °C (trigger e-stop)
+    tmc9660_shutdown: 125  # °C (TMC9660 hardware thermal shutdown)
+
+    stm32_warning: 70  # °C
+    stm32_critical: 85  # °C (ARM Cortex-M7 max operating temp)
+
+  current:
+    warning: 3.0  # A (125% of 2.4A continuous)
+    critical: 5.5  # A (peak limit, trigger e-stop)
+    hardware_limit: 5.5  # A (TMC9660 hard limit via register)
+
+  velocity:
+    continuous_max: 2.33  # mm/s (safe for indefinite operation)
+    peak_max: 5.67  # mm/s (short bursts only)
+    rolling_average_limit: 2.33  # mm/s over 16 seconds
+    emergency_limit: 6.0  # mm/s (trigger e-stop if exceeded)
+
+  position:
+    minimum: -10.4  # mm
+    maximum: +10.4  # mm
+    action: "Software limit check before motion, stop at limit"
+
+  watchdog:
+    type: "No timeout watchdog"
+    behavior: "Rolling buffer naturally handles Master disconnect"
+    mechanism: "When buffer empties, STM32 generates local deceleration trajectory"
+    result: "Robot smoothly stops without Master input"
+
+# ================================
+# GPIO AND HARDWARE PINS
+# ================================
+
+gpio_assignments:
+
+  note: "Specific pin numbers TBD during PCB design and Zephyr device tree configuration"
+
+  spi_tmc9660:
+    description: "SPI bus for 3× TMC9660 motor drivers"
+    pins:
+      - "MOSI (Master Out, Slave In)"
+      - "MISO (Master In, Slave Out)"
+      - "SCK (Clock)"
+      - "CS1 (Chip Select motor 1)"
+      - "CS2 (Chip Select motor 2)"
+      - "CS3 (Chip Select motor 3)"
+    speed: "1 MHz"
+
+  i2c_sensors:
+    description: "I2C bus for IMU and capacitive controller"
+    pins:
+      - "SDA (Data)"
+      - "SCL (Clock)"
+    speed: "400 kHz (Fast Mode)"
+    devices:
+      - "LSM6DSO IMU"
+      - "Capacitive controller (TBD)"
+
+  adc_light_barrier:
+    description: "Analog input for optical light barrier"
+    pins:
+      - "ADC_IN (1 per motor = 3 total)"
+    resolution: "12-bit"
+    voltage_range: "0-3.3V"
+
+  encoder_inputs:
+    description: "Quadrature encoder inputs (can use timer hardware decoder)"
+    pins:
+      - "ENC1_A, ENC1_B (Motor 1)"
+      - "ENC2_A, ENC2_B (Motor 2)"
+      - "ENC3_A, ENC3_B (Motor 3)"
+    mode: "Hardware timer quadrature decoder (no interrupts needed)"
+
+  endstops:
+    description: "Digital inputs for mechanical endstops (backup safety)"
+    pins:
+      - "ENDSTOP1_MIN, ENDSTOP1_MAX (Motor 1)"
+      - "ENDSTOP2_MIN, ENDSTOP2_MAX (Motor 2)"
+      - "ENDSTOP3_MIN, ENDSTOP3_MAX (Motor 3)"
+    pull: "Pull-up resistors"
+
+  e_stop:
+    description: "E-stop daisy chain"
+    pins:
+      - "ESTOP_IN (from previous segment)"
+      - "ESTOP_OUT (to next segment)"
+    behavior: "Monitor input, can open output to trigger chain"
+
+  status_leds:
+    description: "Status indication LEDs"
+    pins:
+      - "LED1 (Network connected)"
+      - "LED2 (Trajectory executing)"
+      - "LED3 (Error/warning)"
+
+# ================================
+# MEMORY USAGE ESTIMATES
+# ================================
+
+memory_estimates:
+
+  flash_usage:
+    zephyr_kernel: "~100 KB"
+    network_stack: "~150 KB"
+    application_code: "~250 KB"
+    total_code: "~500 KB"
+    available: "2 MB"
+    usage_percent: "25%"
+
+  ram_usage:
+    zephyr_kernel: "~100 KB"
+    network_buffers: "~200 KB"
+    rolling_buffer: "~1 KB (5× trajectories)"
+    thread_stacks: "~20 KB"
+    heap: "~100 KB"
+    total: "~421 KB"
+    available: "1 MB"
+    usage_percent: "42%"
+
+  nvs_flash_storage:
+    calibration_data: "~400 bytes"
+    logs: "~10 KB (optional)"
+    configuration: "~1 KB"
+    total: "~11 KB"
+    location: "Separate flash partition"
+
+# ================================
+# IMPLEMENTATION NOTES
+# ================================
+
+implementation_notes:
+
+  - "All position values in millimeters throughout firmware"
+  - "Conversion to encoder ticks only at TMC9660 command interface"
+  - "Conversion from encoder ticks immediately after reading"
+  - "This maintains consistency and reduces conversion errors"
+
+  - "Velocity calculated from position derivative: v = (pos_now - pos_prev) / dt"
+  - "Acceleration calculated: a = (vel_now - vel_prev) / dt"
+  - "Jerk calculated: j = (acc_now - acc_prev) / dt"
+
+  - "Septic polynomial evaluation using Horner's method for efficiency"
+  - "pos = a0 + t*(a1 + t*(a2 + t*(a3 + t*(a4 + t*(a5 + t*(a6 + t*a7))))))"
+
+  - "All calibration data stored in Zephyr NVS for wear leveling"
+  - "Calibration automatically loaded on boot"
+  - "If calibration invalid or missing, perform full homing sequence"
