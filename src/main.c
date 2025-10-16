@@ -1,5 +1,5 @@
 /*
- * Segment Controller Firmware - Phase 4: IMU Integration
+ * Segment Controller Firmware - Phase 5: TMC9660 Motor Driver
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,6 +10,7 @@
 #include "network.h"
 #include "packet.h"
 #include "imu.h"
+#include "tmc9660.h"
 
 /* Segment ID - default 0 (unconfigured) */
 #define MY_SEGMENT_ID 0
@@ -56,6 +57,22 @@ int main(void)
 	if (ret < 0) {
 		printk("Warning: IMU initialization failed: %d\n", ret);
 		printk("Continuing without IMU (orientation will be zeros)\n\n");
+	}
+
+	/* Phase 5: Initialize TMC9660 motor driver */
+	ret = tmc9660_init();
+	if (ret < 0) {
+		printk("Warning: TMC9660 initialization failed: %d\n", ret);
+		printk("Continuing without motor driver (motor control disabled)\n\n");
+	} else {
+		tmc9660_state_t tmc_state;
+		tmc9660_get_state(&tmc_state);
+		printk("[Phase 5] TMC9660 Motor Driver - INITIALIZED\n");
+		printk("  Chip Type: 0x%08X\n", tmc_state.chip_type);
+		printk("  Chip Version: %u\n", tmc_state.chip_version);
+		printk("  Bootloader: %u.%u\n\n",
+		       (tmc_state.bootloader_version >> 16) & 0xFFFF,
+		       tmc_state.bootloader_version & 0xFFFF);
 	}
 
 	/* Main loop */

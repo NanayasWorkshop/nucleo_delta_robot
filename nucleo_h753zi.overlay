@@ -1,6 +1,7 @@
 /*
  * Device Tree Overlay for Nucleo H753ZI
- * Adds LSM6DSO IMU on I2C1 (Arduino connector pins D14/D15)
+ * - LSM6DSO IMU on I2C1 (Arduino connector pins D14/D15)
+ * - TMC9660 motor driver on USART2 (Arduino connector pins D0/D1)
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -21,5 +22,20 @@
 		/* Gyroscope configuration */
 		gyro-range = <6>;  /* ±2000 dps (0=250dps, 1=125dps, 2=500dps, 4=1000dps, 6=2000dps) */
 		gyro-odr = <4>;    /* 104 Hz */
+	};
+};
+
+/* USART2 for TMC9660 motor driver */
+&usart2 {
+	status = "okay";
+	current-speed = <115200>;  /* 115200 baud (TMC9660 autobaud) */
+	pinctrl-0 = <&usart2_tx_pd5 &usart2_rx_pd6>;
+	pinctrl-names = "default";
+};
+
+/* Alias for easy reference in code (use underscore for C identifier) */
+/ {
+	aliases {
+		tmc9660uart = &usart2;
 	};
 };

@@ -15,6 +15,7 @@ target_sources(app PRIVATE
     src/packet.c
     src/crc16.c
     src/imu.c
+    src/tmc9660.c
 )
 
 # Add include directories

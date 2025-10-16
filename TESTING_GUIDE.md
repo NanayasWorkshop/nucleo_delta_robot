@@ -521,6 +521,185 @@ cd ~/zephyrproject && west build -b nucleo_h753zi /path/to/nucleo-firmware --pri
 
 ---
 
+## Phase 5: TMC9660 Motor Driver (UART)
+
+### What Phase 5 Adds:
+- TMC9660 smart gate driver with FOC controller
+- UART bootloader communication protocol
+- 8-byte command/reply message structure with CRC8 checksum
+- Register read/write capability
+- Configuration memory access
+- Chip identification and version reading
+- 115200 baud UART with autobaud support
+
+### Hardware Requirements:
+- TMC9660 evaluation board or custom board
+- 3 jumper wires for UART connection:
+  - GND → GND
+  - TMC_TX (GPIO6/Pin 62) → Nucleo RX (D1/PD6)
+  - TMC_RX (GPIO7/Pin 63) → Nucleo TX (D0/PD5)
+
+### TMC9660 Pin Connections:
+```
+TMC9660 Pins         →    Nucleo H753ZI (Arduino)
+──────────────────────────────────────────────────
+GND                  →    GND
+GPIO6 (UART_TX)      →    D1 (USART2_RX/PD6)
+GPIO7 (UART_RX)      →    D0 (USART2_TX/PD5)
+VDD (optional)       →    3.3V or 5V (depending on TMC9660 board)
+```
+
+**Note:** TMC9660 supports autobaud detection, so no crystal is required for basic UART communication.
+
+### Testing Steps:
+
+1. **Connect TMC9660 to Nucleo:**
+   ```
+   TMC9660          →    Nucleo H753ZI
+   ────────────────────────────────────
+   GND              →    GND
+   GPIO6 (TX)       →    D1 (RX)
+   GPIO7 (RX)       →    D0 (TX)
+   ```
+
+2. **Flash Phase 5 firmware:**
+   ```bash
+   cd ~/zephyrproject
+   west build -b nucleo_h753zi /home/yuuki/claude-projects/delta_robot/workspace/dev-boards/nucleo-firmware --pristine
+   west flash
+   ```
+
+3. **Monitor serial console:**
+   ```bash
+   minicom -D /dev/ttyACM0 -b 115200
+   ```
+
+4. **Expected output (TMC9660 connected):**
+   ```
+   ========================================
+     Segment Controller Firmware
+   ========================================
+   Board: nucleo_h753zi
+   Zephyr Version: 4.2.99
+   ========================================
+
+   [Phase 1] Basic Bringup - SUCCESS
+
+   [Phase 2] Initializing Network...
+   Network interface found: eth0
+   DHCP event handler registered
+   Starting DHCP client...
+
+   [Phase 4] Initializing IMU (LSM6DSO)...
+   LSM6DSO device found: lsm6dso@6a
+   Madgwick filter initialized (beta=0.10, freq=100 Hz)
+   [Phase 4] IMU initialized successfully
+
+   [Phase 5] Initializing TMC9660 motor driver...
+   TMC9660 UART initialized
+   Chip type verified: 0x544D0001
+   Chip version: 1
+   Bootloader version: 1.0
+
+   [Phase 5] TMC9660 Motor Driver - INITIALIZED
+     Chip Type: 0x544D0001
+     Chip Version: 1
+     Bootloader: 1.0
+
+   === DHCP Success ===
+   IP Address assigned: 192.168.1.100
+   Network is ready!
+   ====================
+
+   [Phase 3] Packet Protocol - READY
+   Listening for commands on:
+     - TCP port 5000 (trajectory, config)
+     - UDP port 6000 (emergency stop)
+
+   Ready to receive packets at: 192.168.1.100
+   ```
+
+5. **Expected output (TMC9660 not connected):**
+   ```
+   [Phase 5] Initializing TMC9660 motor driver...
+   TMC9660 UART initialized
+   Failed to read chip type: -116
+   Warning: TMC9660 initialization failed: -116
+   Continuing without motor driver (motor control disabled)
+   ```
+   This is normal if TMC9660 is not connected yet - firmware continues without motor control.
+
+6. **Test TMC9660 communication:**
+
+   If you have the TMC9660 connected, you can verify communication by checking:
+   - Chip type should be `0x544D0001`
+   - Chip version should be `1` or `2`
+   - Bootloader version should be displayed (e.g., `1.0`)
+
+   The firmware automatically queries the TMC9660 on startup and prints these values.
+
+7. **Success criteria:**
+   - ✓ UART2 initialized successfully
+   - ✓ TMC9660 chip detected (if connected)
+   - ✓ Chip type matches expected value (0x544D0001)
+   - ✓ Bootloader version read successfully
+   - ✓ No UART communication errors
+   - ✓ CRC8 checksums verify correctly
+   - ✓ Phase 4 IMU still works
+   - ✓ Phase 3 networking still works
+
+8. **If it fails:**
+
+   **UART device not ready:**
+   - Check device tree overlay (usart2 enabled?)
+   - Verify UART pins configured correctly in overlay
+   - Try reflashing firmware
+
+   **Chip type mismatch or read fails:**
+   - Check UART wiring (TX/RX not swapped)
+   - Verify GND connection between boards
+   - Check TMC9660 power supply (must be powered on)
+   - Verify TMC9660 is in bootloader mode (default on power-up)
+   - Try lower baud rate if autobaud fails
+
+   **CRC8 errors:**
+   - UART noise or timing issues
+   - Try shorter wires or twisted pair
+   - Check ground connection quality
+   - Reduce baud rate from 115200 to 57600
+
+   **TMC9660 powers up but no response:**
+   - Check GPIO6/GPIO7 are configured as UART (default)
+   - Verify device address is 0x01 (default)
+   - Try sending NO_OP command manually
+   - Check if TMC9660 entered motor control mode (should stay in bootloader)
+
+   **Phase 4 still works?**
+   - Yes → Debug Phase 5 TMC9660 code
+   - No → Rollback to Phase 4
+
+### Testing without motor:
+
+Even without a motor connected, you can test the TMC9660 driver:
+- ✓ Read chip identification
+- ✓ Read/write configuration registers
+- ✓ Test UART communication
+- ✓ Verify CRC8 checksums
+
+You **cannot** test (motor required):
+- ✗ Motor current measurement
+- ✗ FOC control loop
+- ✗ Position/velocity feedback
+- ✗ Torque control
+
+### Rollback to Phase 4:
+```bash
+git checkout phase4-ready
+cd ~/zephyrproject && west build -b nucleo_h753zi /path/to/nucleo-firmware --pristine && west flash
+```
+
+---
+
 ## Troubleshooting
 
 ### Serial Console Issues:
@@ -577,6 +756,7 @@ phase1-ready
 phase2-ready
 phase3-ready
 phase4-ready
+phase5-ready
 ```
 
 ### Switch between phases:
@@ -592,6 +772,9 @@ git checkout phase3-ready
 
 # Go to Phase 4
 git checkout phase4-ready
+
+# Go to Phase 5
+git checkout phase5-ready
 
 # Go back to latest
 git checkout master
