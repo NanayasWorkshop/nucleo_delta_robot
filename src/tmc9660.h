@@ -1,7 +1,9 @@
 /*
- * TMC9660 UART Driver
+ * TMC9660 UART Driver - Multi-Motor Support
  * Smart gate driver with FOC controller
  * Communication via UART bootloader protocol
+ *
+ * Supports 3 independent TMC9660 chips (motors A, B, C)
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,6 +13,16 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+
+/* Number of motors supported */
+#define TMC9660_NUM_MOTORS 3
+
+/* Motor IDs */
+typedef enum {
+	TMC9660_MOTOR_A = 0,
+	TMC9660_MOTOR_B = 1,
+	TMC9660_MOTOR_C = 2,
+} tmc9660_motor_id_t;
 
 /* TMC9660 UART Protocol Constants */
 #define TMC9660_SYNC_BYTE           0x55
@@ -88,93 +100,111 @@ typedef struct {
 } tmc9660_state_t;
 
 /**
- * Initialize TMC9660 UART driver
+ * Initialize all TMC9660 UART drivers
  *
  * @return 0 on success, negative errno on error
  */
-int tmc9660_init(void);
+int tmc9660_init_all(void);
+
+/**
+ * Initialize specific TMC9660 motor
+ *
+ * @param motor Motor ID (MOTOR_A, MOTOR_B, or MOTOR_C)
+ * @return 0 on success, negative errno on error
+ */
+int tmc9660_init(tmc9660_motor_id_t motor);
 
 /**
  * Check if TMC9660 is initialized and responding
  *
+ * @param motor Motor ID
  * @return true if initialized, false otherwise
  */
-bool tmc9660_is_ready(void);
+bool tmc9660_is_ready(tmc9660_motor_id_t motor);
 
 /**
  * Send GET_INFO command to read chip information
  *
+ * @param motor Motor ID
  * @param info_selector Info selector (see TMC9660_INFO_* defines)
  * @param value Output: 32-bit info value
  * @return 0 on success, negative errno on error
  */
-int tmc9660_get_info(uint8_t info_selector, uint32_t *value);
+int tmc9660_get_info(tmc9660_motor_id_t motor, uint8_t info_selector, uint32_t *value);
 
 /**
  * Set memory bank for subsequent read/write operations
  *
+ * @param motor Motor ID
  * @param bank Memory bank number (see TMC9660_BANK_* defines)
  * @return 0 on success, negative errno on error
  */
-int tmc9660_set_bank(uint8_t bank);
+int tmc9660_set_bank(tmc9660_motor_id_t motor, uint8_t bank);
 
 /**
  * Set memory address for subsequent read/write operations
  *
+ * @param motor Motor ID
  * @param addr 32-bit memory address
  * @return 0 on success, negative errno on error
  */
-int tmc9660_set_address(uint32_t addr);
+int tmc9660_set_address(tmc9660_motor_id_t motor, uint32_t addr);
 
 /**
  * Read 32-bit value from current memory address
  *
+ * @param motor Motor ID
  * @param value Output: 32-bit value read
  * @return 0 on success, negative errno on error
  */
-int tmc9660_read_32(uint32_t *value);
+int tmc9660_read_32(tmc9660_motor_id_t motor, uint32_t *value);
 
 /**
  * Write 32-bit value to current memory address
  *
+ * @param motor Motor ID
  * @param value 32-bit value to write
  * @return 0 on success, negative errno on error
  */
-int tmc9660_write_32(uint32_t value);
+int tmc9660_write_32(tmc9660_motor_id_t motor, uint32_t value);
 
 /**
  * Read register from CONFIG memory
  * Automatically handles bank selection and address setting
  *
+ * @param motor Motor ID
  * @param offset Offset within CONFIG memory (0-63)
  * @param value Output: 32-bit value read
  * @return 0 on success, negative errno on error
  */
-int tmc9660_read_config(uint8_t offset, uint32_t *value);
+int tmc9660_read_config(tmc9660_motor_id_t motor, uint8_t offset, uint32_t *value);
 
 /**
  * Write register to CONFIG memory
  * Automatically handles bank selection and address setting
  * Note: Writing to CONFIG triggers runtime reconfiguration
  *
+ * @param motor Motor ID
  * @param offset Offset within CONFIG memory (0-63)
  * @param value 32-bit value to write
  * @return 0 on success, negative errno on error
  */
-int tmc9660_write_config(uint8_t offset, uint32_t value);
+int tmc9660_write_config(tmc9660_motor_id_t motor, uint8_t offset, uint32_t value);
 
 /**
  * Get current TMC9660 state information
  *
+ * @param motor Motor ID
  * @param state Output: Current device state
  */
-void tmc9660_get_state(tmc9660_state_t *state);
+void tmc9660_get_state(tmc9660_motor_id_t motor, tmc9660_state_t *state);
 
 /**
  * Send NO_OP command (useful for testing communication)
  *
+ * @param motor Motor ID
  * @return 0 on success, negative errno on error
  */
-int tmc9660_no_op(void);
+int tmc9660_no_op(tmc9660_motor_id_t motor);
 
 #endif /* TMC9660_H */

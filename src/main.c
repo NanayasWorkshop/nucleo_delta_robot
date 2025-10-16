@@ -59,21 +59,31 @@ int main(void)
 		printk("Continuing without IMU (orientation will be zeros)\n\n");
 	}
 
-	/* Phase 5: Initialize TMC9660 motor driver */
-	ret = tmc9660_init();
+	/* Phase 5: Initialize all TMC9660 motor drivers (A, B, C) */
+	ret = tmc9660_init_all();
 	if (ret < 0) {
-		printk("Warning: TMC9660 initialization failed: %d\n", ret);
-		printk("Continuing without motor driver (motor control disabled)\n\n");
-	} else {
-		tmc9660_state_t tmc_state;
-		tmc9660_get_state(&tmc_state);
-		printk("[Phase 5] TMC9660 Motor Driver - INITIALIZED\n");
-		printk("  Chip Type: 0x%08X\n", tmc_state.chip_type);
-		printk("  Chip Version: %u\n", tmc_state.chip_version);
-		printk("  Bootloader: %u.%u\n\n",
-		       (tmc_state.bootloader_version >> 16) & 0xFFFF,
-		       tmc_state.bootloader_version & 0xFFFF);
+		printk("Warning: Not all TMC9660 motors initialized\n");
+		printk("Check which motors are connected and responding\n\n");
 	}
+
+	/* Print status for each motor */
+	printk("[Phase 5] TMC9660 Motor Drivers:\n");
+	for (int i = 0; i < TMC9660_NUM_MOTORS; i++) {
+		const char *motor_names[] = {"A", "B", "C"};
+		if (tmc9660_is_ready((tmc9660_motor_id_t)i)) {
+			tmc9660_state_t tmc_state;
+			tmc9660_get_state((tmc9660_motor_id_t)i, &tmc_state);
+			printk("  Motor %s: OK (type=0x%08X, v%u, BL=%u.%u)\n",
+			       motor_names[i],
+			       tmc_state.chip_type,
+			       tmc_state.chip_version,
+			       (tmc_state.bootloader_version >> 16) & 0xFFFF,
+			       tmc_state.bootloader_version & 0xFFFF);
+		} else {
+			printk("  Motor %s: NOT CONNECTED\n", motor_names[i]);
+		}
+	}
+	printk("\n");
 
 	/* Main loop */
 	while (1) {

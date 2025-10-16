@@ -521,45 +521,78 @@ cd ~/zephyrproject && west build -b nucleo_h753zi /path/to/nucleo-firmware --pri
 
 ---
 
-## Phase 5: TMC9660 Motor Driver (UART)
+## Phase 5: TMC9660 Motor Driver (UART) - Multi-Motor Support
 
 ### What Phase 5 Adds:
 - TMC9660 smart gate driver with FOC controller
-- UART bootloader communication protocol
+- **Support for 3 independent motors (Motor A, B, C)**
+- UART bootloader communication protocol (separate UART for each motor)
 - 8-byte command/reply message structure with CRC8 checksum
 - Register read/write capability
 - Configuration memory access
 - Chip identification and version reading
 - 115200 baud UART with autobaud support
+- Per-motor thread-safe access with mutexes
 
 ### Hardware Requirements:
-- TMC9660 evaluation board or custom board
-- 3 jumper wires for UART connection:
-  - GND → GND
-  - TMC_TX (GPIO6/Pin 62) → Nucleo RX (D1/PD6)
-  - TMC_RX (GPIO7/Pin 63) → Nucleo TX (D0/PD5)
+- 3× TMC9660 evaluation boards or custom boards (one per motor)
+- 9 jumper wires total (3× UART connections):
+  - Motor A: USART2 on pins D0/D1 (PD5/PD6)
+  - Motor B: USART3 on pins D8/D9 (PD8/PD9)
+  - Motor C: USART6 on pins PC6/PC7
+- Common GND between Nucleo and all TMC9660 boards
 
-### TMC9660 Pin Connections:
+### TMC9660 Pin Connections (3 Motors):
+
+**Motor A (USART2 - Arduino D0/D1):**
 ```
-TMC9660 Pins         →    Nucleo H753ZI (Arduino)
-──────────────────────────────────────────────────
+TMC9660 Motor A      →    Nucleo H753ZI
+──────────────────────────────────────
 GND                  →    GND
 GPIO6 (UART_TX)      →    D1 (USART2_RX/PD6)
 GPIO7 (UART_RX)      →    D0 (USART2_TX/PD5)
-VDD (optional)       →    3.3V or 5V (depending on TMC9660 board)
+VDD (optional)       →    3.3V or 5V
 ```
 
-**Note:** TMC9660 supports autobaud detection, so no crystal is required for basic UART communication.
+**Motor B (USART3 - Morpho D8/D9):**
+```
+TMC9660 Motor B      →    Nucleo H753ZI
+──────────────────────────────────────
+GND                  →    GND
+GPIO6 (UART_TX)      →    D9 (USART3_RX/PD9)
+GPIO7 (UART_RX)      →    D8 (USART3_TX/PD8)
+VDD (optional)       →    3.3V or 5V
+```
+
+**Motor C (USART6 - Morpho PC6/PC7):**
+```
+TMC9660 Motor C      →    Nucleo H753ZI
+──────────────────────────────────────
+GND                  →    GND
+GPIO6 (UART_TX)      →    PC7 (USART6_RX)
+GPIO7 (UART_RX)      →    PC6 (USART6_TX)
+VDD (optional)       →    3.3V or 5V
+```
+
+**Important notes:**
+- All 3 TMC9660 boards must share a common GND with the Nucleo
+- Each motor uses a separate UART - no address conflicts
+- TMC9660 supports autobaud detection, so no crystal is required
+- You can test with 1, 2, or 3 motors connected - firmware handles missing motors gracefully
 
 ### Testing Steps:
 
-1. **Connect TMC9660 to Nucleo:**
+1. **Connect TMC9660(s) to Nucleo:**
+
+   You can connect 1, 2, or all 3 motors. Start with Motor A for initial testing.
+
+   **Minimal setup (Motor A only):**
    ```
-   TMC9660          →    Nucleo H753ZI
+   TMC9660 Motor A  →    Nucleo H753ZI
    ────────────────────────────────────
    GND              →    GND
-   GPIO6 (TX)       →    D1 (RX)
-   GPIO7 (RX)       →    D0 (TX)
+   GPIO6 (TX)       →    D1 (USART2_RX/PD6)
+   GPIO7 (RX)       →    D0 (USART2_TX/PD5)
    ```
 
 2. **Flash Phase 5 firmware:**
@@ -574,7 +607,7 @@ VDD (optional)       →    3.3V or 5V (depending on TMC9660 board)
    minicom -D /dev/ttyACM0 -b 115200
    ```
 
-4. **Expected output (TMC9660 connected):**
+4. **Expected output (all 3 motors connected):**
    ```
    ========================================
      Segment Controller Firmware
@@ -595,16 +628,10 @@ VDD (optional)       →    3.3V or 5V (depending on TMC9660 board)
    Madgwick filter initialized (beta=0.10, freq=100 Hz)
    [Phase 4] IMU initialized successfully
 
-   [Phase 5] Initializing TMC9660 motor driver...
-   TMC9660 UART initialized
-   Chip type verified: 0x544D0001
-   Chip version: 1
-   Bootloader version: 1.0
-
-   [Phase 5] TMC9660 Motor Driver - INITIALIZED
-     Chip Type: 0x544D0001
-     Chip Version: 1
-     Bootloader: 1.0
+   [Phase 5] TMC9660 Motor Drivers:
+     Motor A: OK (type=0x544D0001, v1, BL=1.0)
+     Motor B: OK (type=0x544D0001, v1, BL=1.0)
+     Motor C: OK (type=0x544D0001, v1, BL=1.0)
 
    === DHCP Success ===
    IP Address assigned: 192.168.1.100
@@ -619,60 +646,86 @@ VDD (optional)       →    3.3V or 5V (depending on TMC9660 board)
    Ready to receive packets at: 192.168.1.100
    ```
 
-5. **Expected output (TMC9660 not connected):**
+5. **Expected output (only Motor A connected):**
    ```
-   [Phase 5] Initializing TMC9660 motor driver...
-   TMC9660 UART initialized
-   Failed to read chip type: -116
-   Warning: TMC9660 initialization failed: -116
-   Continuing without motor driver (motor control disabled)
+   [Phase 5] TMC9660 Motor Drivers:
+     Motor A: OK (type=0x544D0001, v1, BL=1.0)
+     Motor B: NOT CONNECTED
+     Motor C: NOT CONNECTED
    ```
-   This is normal if TMC9660 is not connected yet - firmware continues without motor control.
+   This is normal - you can operate with fewer than 3 motors during testing.
 
-6. **Test TMC9660 communication:**
+6. **Expected output (no motors connected):**
+   ```
+   [Phase 5] TMC9660 Motor Drivers:
+     Motor A: NOT CONNECTED
+     Motor B: NOT CONNECTED
+     Motor C: NOT CONNECTED
 
-   If you have the TMC9660 connected, you can verify communication by checking:
-   - Chip type should be `0x544D0001`
-   - Chip version should be `1` or `2`
-   - Bootloader version should be displayed (e.g., `1.0`)
+   Warning: Not all TMC9660 motors initialized
+   Check which motors are connected and responding
+   ```
+   This is normal if TMC9660s are not connected yet - firmware continues without motor control.
 
-   The firmware automatically queries the TMC9660 on startup and prints these values.
+7. **Test TMC9660 communication:**
 
-7. **Success criteria:**
-   - ✓ UART2 initialized successfully
-   - ✓ TMC9660 chip detected (if connected)
-   - ✓ Chip type matches expected value (0x544D0001)
-   - ✓ Bootloader version read successfully
+   The firmware automatically queries each TMC9660 on startup and prints:
+   - Chip type: `0x544D0001` (expected)
+   - Chip version: `1` or `2`
+   - Bootloader version: `1.0` or higher
+
+   **Gradual testing approach:**
+   1. Start with Motor A only
+   2. Once Motor A works, add Motor B
+   3. Finally add Motor C
+   4. This helps isolate wiring issues
+
+8. **Success criteria:**
+   - ✓ All 3 UARTs (USART2, USART3, USART6) initialized successfully
+   - ✓ Each connected TMC9660 chip detected
+   - ✓ Chip type matches expected value (0x544D0001) for each motor
+   - ✓ Bootloader version read successfully for each motor
    - ✓ No UART communication errors
    - ✓ CRC8 checksums verify correctly
+   - ✓ Firmware gracefully handles missing motors (shows "NOT CONNECTED")
    - ✓ Phase 4 IMU still works
    - ✓ Phase 3 networking still works
 
-8. **If it fails:**
+9. **If it fails:**
 
    **UART device not ready:**
-   - Check device tree overlay (usart2 enabled?)
+   - Check device tree overlay (usart2/3/6 enabled?)
    - Verify UART pins configured correctly in overlay
+   - Confirm pin mappings match your board (D0/D1, D8/D9, PC6/PC7)
    - Try reflashing firmware
 
-   **Chip type mismatch or read fails:**
-   - Check UART wiring (TX/RX not swapped)
+   **Chip type mismatch or read fails (specific motor):**
+   - Check UART wiring for that motor (TX/RX not swapped)
    - Verify GND connection between boards
-   - Check TMC9660 power supply (must be powered on)
+   - Check TMC9660 power supply for that motor (must be powered on)
    - Verify TMC9660 is in bootloader mode (default on power-up)
+   - Test one motor at a time to isolate the issue
    - Try lower baud rate if autobaud fails
 
    **CRC8 errors:**
    - UART noise or timing issues
-   - Try shorter wires or twisted pair
-   - Check ground connection quality
+   - Try shorter wires or twisted pair for UART connections
+   - Check ground connection quality (ensure common GND)
    - Reduce baud rate from 115200 to 57600
+   - Separate UART wires from power wires to reduce interference
 
    **TMC9660 powers up but no response:**
    - Check GPIO6/GPIO7 are configured as UART (default)
    - Verify device address is 0x01 (default)
    - Try sending NO_OP command manually
    - Check if TMC9660 entered motor control mode (should stay in bootloader)
+   - Verify the correct motor is connected to the correct UART pins
+
+   **Only some motors work:**
+   - This is actually OK for testing! Verify working motors first
+   - Then debug non-working motors individually
+   - Check wiring for non-working motors
+   - Swap TMC9660 boards to see if issue follows the board or the UART
 
    **Phase 4 still works?**
    - Yes → Debug Phase 5 TMC9660 code

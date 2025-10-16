@@ -25,7 +25,7 @@
 	};
 };
 
-/* USART2 for TMC9660 motor driver */
+/* USART2 for TMC9660 Motor A */
 &usart2 {
 	status = "okay";
 	current-speed = <115200>;  /* 115200 baud (TMC9660 autobaud) */
@@ -33,9 +33,27 @@
 	pinctrl-names = "default";
 };
 
-/* Alias for easy reference in code (use underscore for C identifier) */
+/* USART3 for TMC9660 Motor B */
+&usart3 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&usart3_tx_pd8 &usart3_rx_pd9>;
+	pinctrl-names = "default";
+};
+
+/* USART6 for TMC9660 Motor C */
+&usart6 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&usart6_tx_pc6 &usart6_rx_pc7>;
+	pinctrl-names = "default";
+};
+
+/* Aliases for easy reference in code */
 / {
 	aliases {
-		tmc9660uart = &usart2;
+		tmc9660a = &usart2;  /* Motor A */
+		tmc9660b = &usart3;  /* Motor B */
+		tmc9660c = &usart6;  /* Motor C */
 	};
 };
