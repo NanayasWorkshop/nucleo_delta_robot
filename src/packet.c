@@ -220,7 +220,7 @@ void packet_build_motor_state(motor_state_packet_t *pkt, uint8_t segment_id)
 	pkt->status_flags = packet_get_status_flags();
 
 	/* Calculate CRC */
-	pkt->crc16 = crc16_ccitt((uint8_t *)pkt, sizeof(*pkt) - 2);
+	pkt->crc16 = crc16_ccitt(0xFFFF, (uint8_t *)pkt, sizeof(*pkt) - 2);
 }
 
 void packet_build_diagnostics(diagnostics_packet_t *pkt, uint8_t segment_id)
@@ -245,7 +245,7 @@ void packet_build_diagnostics(diagnostics_packet_t *pkt, uint8_t segment_id)
 	pkt->cpu_usage = 10;  /* Placeholder */
 
 	/* Calculate CRC */
-	pkt->crc16 = crc16_ccitt((uint8_t *)pkt, sizeof(*pkt) - 2);
+	pkt->crc16 = crc16_ccitt(0xFFFF, (uint8_t *)pkt, sizeof(*pkt) - 2);
 }
 
 uint8_t packet_get_status_flags(void)

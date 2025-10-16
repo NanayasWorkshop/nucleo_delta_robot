@@ -1,0 +1,8 @@
+# Python dependencies for test tools
+
+# For Phase 2-3 testing
+# (no external dependencies - uses built-in socket and struct)
+
+# For 3D IMU visualization (Phase 4)
+PyOpenGL==3.1.7
+pygame==2.5.2

@@ -13,7 +13,6 @@ target_sources(app PRIVATE
     src/main.c
     src/network.c
     src/packet.c
-    src/crc16.c
     src/imu.c
     src/tmc9660.c
 )
